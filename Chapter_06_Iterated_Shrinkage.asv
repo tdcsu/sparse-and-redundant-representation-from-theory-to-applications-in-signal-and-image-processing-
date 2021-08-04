@@ -1,0 +1,474 @@
+% Figures - 6.5 - 6.12
+% =========================================
+
+function []=Chapter_06_Iterated_Shrinkage()
+
+%==========================================
+% The problem we aim to minimize is    
+%               min 0.5||Ax-b||^2 + \lambda ||x||_1
+% This script runs a comparative study of iterative shrinkage algorithms.
+% The methods considered include:
+%     - SSF
+%     - SSF + Line Search 
+%     - IRLS
+%     - PCD + Line Search 
+%     - SSF-SESOP-5 
+%     - IRLS + SESOP 5, and 
+%     - PCD-SESOP-5
+% Details:
+%     - A=Pout*H*Pin, where H is the Hadamard matrix, Pin scales each
+%       element differently, and Pout chooses a subset of the resulting
+%       vector. A is of size 2^12 * 2^16
+%     - x0 (the true solution) is a synthetic vector with 200 non-zeros at
+%       random locations, and with N(0,1) IID values
+%     - b=Ax0+v, where v is random IID Gaussian Noise, with sigma=0.1
+%       lambda - chosen empirically to give good results
+% 
+% Output produced:
+%     - The function value f(a) as a function of the computations 
+%     - The MSE as a function of the iterations
+%     - The solution obtained and detection of original non-zeros
+%==========================================
+
+clear all;
+
+%==========================================
+%  O r g a n i z i n g   t h e   D a t a                     
+%==========================================
+
+m=2^16; n=2^14; S=2000; sigma=0.2; 
+posH=randperm(m); posH=sort(posH(1:n));
+Pin=spdiags((1:4/(m-1):5)',[0],m,m);
+Pout=speye(m,m); Pout=Pout(posH,:);
+
+x0=zeros(m,1);
+posX=randperm(m); posX=sort(posX(1:S));
+x0(posX)=randn(S,1);
+Ax0=Pout*fht(Pin*x0); 
+b=Ax0+randn(n,1)*sigma; 
+disp(['SNR=',num2str(Ax0'*Ax0/((b-Ax0)'*(b-Ax0)))]);
+ 
+% computing c for SSF and IRLS 
+% iter=100; 
+% temp=randn(m,1); 
+% for k=1:1:iter, 
+%     temp=temp/norm(temp); 
+%     temp=Pout*fht(Pin*temp);
+%     temp=Pin*ifht(Pout'*temp);
+%     disp([k,norm(temp)]);
+% end; 
+% c=norm(temp); 
+c=25; % known analythically  (uppper bound)
+
+% computing diag(A'*A) for PCD
+% iter=100; 
+% ww=zeros(m,1);
+% for k=1:1:iter,
+%     temp=randn(n,1); 
+%     temp=Pin*ifht(Pout'*temp);
+%     ww=ww+temp.^2;
+%     figure(1); clf; 
+%     plot(sqrt(ww/k)); hold on; 
+%     plot((1:4/(m-1):5)*sqrt(n/m),'r'); drawnow;
+% end;
+% W=ww/iter; 
+W=[(1:4/(m-1):5)'.^2]*n/m; % known analythically
+IW=1./W;
+
+lambda = 1; % chosen empirically
+Iter = 50; % number of iterations in each of the algorithms 
+LSiter = 50; % Number of iterations of the line-search & SESOP
+Results=struct('Name',[],'Function_Value',[],'MSE',[]);
+
+%==========================================
+% A L G O R I T H M S   S I M U L A T I O N S                        
+%==========================================
+
+% ------------------------ Part 1 - Run plain SSF ----------------------------------
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=(1/c)*ATerr+x;
+    x=(abs(temp)>=lambda/c).*(abs(temp)-lambda/c).*sign(temp);
+    Ax=Pout*fht(Pin*x); 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(1).Name='SSF'; 
+Results(1).Function_Value=f; 
+Results(1).MSE=Error; 
+% ----------------------- Part 2 - Run SSF + LS  ----------------------------------
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+ for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=(1/c)*ATerr+x;
+    temp=(abs(temp)>=lambda/c).*(abs(temp)-lambda/c).*sign(temp);
+    d=temp-x;
+    Ad=Pout*fht(Pin*d);
+    mu=1;
+    for kk=1:1:LSiter,
+        mu=mu-1e-3*(Ad'*(Ad*mu-err)+lambda*d'*sign(x+mu*d));
+    end;
+    x=x+mu*d;
+    Ax=Pout*fht(Pin*x); 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(2).Name='SSF-LS'; 
+Results(2).Function_Value=f; 
+Results(2).MSE=Error; 
+% -------------------------- Part 3 - Run plain IRLS ---------------------------------
+x=ones(m,1)*1e-3;
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=(2/c)*ATerr+x;
+    W_IRLS=(x.^2)./(x.^2+lambda*4/c*abs(x)+1e-9);    
+    x=W_IRLS.*temp; 
+    Ax=Pout*fht(Pin*x);
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(3).Name='IRLS'; 
+Results(3).Function_Value=f; 
+Results(3).MSE=Error; 
+% -------------------------- Part 4 - Run PCD ----------------------------------------
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=IW.*ATerr+x;
+    temp=(abs(temp)>=IW*lambda).* ...
+                    (abs(temp)-IW*lambda).*sign(temp);
+    d=temp-x;
+    Ad=Pout*fht(Pin*d);
+    mu=1;
+    for kk=1:1:LSiter,
+        mu=mu-1e-5*(Ad'*(Ad*mu-err)+lambda*d'*sign(x+mu*d));
+    end;
+    disp(mu);
+    x=x+mu*d;
+    Ax=Pout*fht(Pin*x); 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(4).Name='PCD-LS'; 
+Results(4).Function_Value=f; 
+Results(4).MSE=Error; 
+% ----------------------- Part 5 - Run SSF + SESOP-5 ---------------------------
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+M=5; % order of the SESOP
+SubS=zeros(m,M);
+ASubS=zeros(n,M);
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=(1/c)*ATerr+x;
+    temp=(abs(temp)>=lambda/c).*(abs(temp)-lambda/c).*sign(temp);
+    SubS=[SubS(:,2:M),temp-x];
+    Atemp=Pout*fht(Pin*temp); 
+    ASubS=[ASubS(:,2:M),Atemp-Ax];
+    mu=[zeros(M-1,1); 1];
+    for kk=1:1:LSiter,
+        mu=mu-5e-4*(ASubS'*(ASubS*mu-err)+...
+                                        lambda*SubS'*sign(x+SubS*mu));
+    end;
+    x=x+SubS*mu;
+    disp(mu');
+    Ax=Ax+ASubS*mu; 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(5).Name='SSF-SESOP'; 
+Results(5).Function_Value=f; 
+Results(5).MSE=Error; 
+% ----------------------- Part 6 - Run PCD + SESOP-5 ---------------------------
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+M=5; % order of the SESOP
+SubS=zeros(m,M);
+ASubS=zeros(n,M);
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=IW.*ATerr+x;
+    temp=(abs(temp)>=IW*lambda).* ...
+                    (abs(temp)-IW*lambda).*sign(temp);
+    SubS=[SubS(:,2:M),temp-x];
+    Atemp=Pout*fht(Pin*temp); 
+    ASubS=[ASubS(:,2:M),Atemp-Ax];
+    mu=[zeros(M-1,1); 1];
+    for kk=1:1:LSiter,
+        mu=mu-1e-5*(ASubS'*(ASubS*mu-err)+...
+                                        lambda*SubS'*sign(x+SubS*mu));
+    end;
+    x=x+SubS*mu;
+    disp(mu');
+    Ax=Ax+ASubS*mu; 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(6).Name='PCD-SESOP'; 
+Results(6).Function_Value=f; 
+Results(6).MSE=Error; 
+% ----------------------- Part 7 - Run IRLS + SESOP-5 ---------------------------
+x=ones(m,1)*1e-3;
+Ax=Pout*fht(Pin*x); 
+f(1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+Error(1)=mean((x-x0).^2)/mean(x0.^2); 
+fprintf('Iteration: %i : Value: %f  MSE: %f\n',0,f(1),Error(1));
+M=5; % order of the SESOP
+SubS=zeros(m,M);
+ASubS=zeros(n,M);
+for k=1:1:Iter,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=(2/c)*ATerr+x;
+    W_IRLS=(x.^2)./(x.^2+lambda*4/c*abs(x)+1e-9);    
+    temp=W_IRLS.*temp; 
+    SubS=[SubS(:,2:M),temp-x];
+    Atemp=Pout*fht(Pin*temp); 
+    ASubS=[ASubS(:,2:M),Atemp-Ax];
+    mu=[zeros(M-1,1); 1];
+    for kk=1:1:LSiter,
+        mu=mu-0.001*(ASubS'*(ASubS*mu-err)+...
+                                        lambda*SubS'*sign(x+SubS*mu));
+    end;
+    x=x+SubS*mu;
+    disp(mu');
+    Ax=Ax+ASubS*mu; 
+    f(k+1)=0.5*sum((Ax-b).^2)+lambda*sum(abs(x)); 
+    Error(k+1)=mean((x-x0).^2)/mean(x0.^2); 
+    fprintf('Iteration: %i : Value: %f  MSE: %f  Residual: %f\n'...
+                       ,k,f(k+1),Error(k+1),sqrt(mean((Ax-b).^2)));
+end;
+Results(7).Name='IRLS-SESOP'; 
+Results(7).Function_Value=f; 
+Results(7).MSE=Error; 
+%=========================================
+%  C R E A T I O N   O F   O U T P U T                     
+%=========================================
+
+% Part 1 - the function's value
+figure(1); clf;
+MM=floor(min(Results(6).Function_Value));
+h=semilogy(0:1:50,Results(1).Function_Value-MM,'k.');
+set(h,'MarkerSize',10);
+hold on;
+h=semilogy(0:1:50,Results(2).Function_Value-MM,'k');
+set(h,'LineWidth',2);
+h=semilogy(0:1:50,Results(5).Function_Value-MM,'k:');
+set(h,'LineWidth',2);
+legend({'SSF','SSF-LS','SSF-SESOP-5'});
+axis([0 50 0.1 4000]);
+set(gca,'FontSize',14);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('f(x_k)-f_{min}');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Function1.eps
+
+figure(2); clf;
+MM=floor(min(Results(6).Function_Value));
+h=semilogy(0:1:50,Results(2).Function_Value-MM,'k.');
+set(h,'LineWidth',2);
+hold on;
+h=semilogy(0:1:50,Results(3).Function_Value-MM,'k'); 
+set(h,'LineWidth',2);
+h=semilogy(0:1:50,Results(7).Function_Value-MM,'k:'); 
+set(h,'LineWidth',2);
+legend({'SSF-LS','IRLS','IRLS-SESOP5'});
+axis([0 50 0.1 4000]);
+set(gca,'FontSize',14);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('f(x_k)-f_{min}');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Function2.eps
+
+figure(3); clf;
+MM=floor(min(Results(6).Function_Value));
+h=semilogy(0:1:50,Results(2).Function_Value-MM,'k.');
+set(h,'MarkerSize',10);
+hold on;
+h=semilogy(0:1:50,Results(4).Function_Value-MM,'k');
+set(h,'LineWidth',2);
+h=semilogy(0:1:50,Results(6).Function_Value-MM,'k:');
+set(h,'LineWidth',2);
+legend({'SSF-LS','PCD-LS','PCD-SESOP-5'});
+axis([0 50 0.1 4000]);
+set(gca,'FontSize',14);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('f(x_k)-f_{min}');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Function3.eps
+
+% Part 2 - the MSE
+figure(4); clf;
+h=plot(0:1:50,Results(1).MSE,'k.');
+set(h,'MarkerSize',10);
+hold on;
+h=plot(0:1:50,Results(2).MSE,'k');
+set(h,'LineWidth',2);
+h=plot(0:1:50,Results(5).MSE,'k:');
+set(h,'LineWidth',2);
+legend({'SSF','SSF-LS','SSF-SESOP-5'});
+set(gca,'FontSize',14);
+axis([0 50 0.3 1]);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('||x_k - x_0||^2');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Accuracy1.eps
+
+figure(5); clf;
+h=plot(0:1:50,Results(2).MSE,'k.');
+set(h,'LineWidth',2);
+hold on;
+h=plot(0:1:50,Results(3).MSE,'k'); 
+set(h,'LineWidth',2);
+h=plot(0:1:50,Results(7).MSE,'k:'); 
+set(h,'LineWidth',2);
+legend({'SSF-LS','IRLS','IRLS-SESOP5'});
+set(gca,'FontSize',14);
+axis([0 50 0.3 1]);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('||x_k - x_0||^2');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Accuracy2.eps
+
+figure(6); clf;
+h=plot(0:1:50,Results(2).MSE,'k.');
+set(h,'LineWidth',2);
+hold on;
+h=plot(0:1:50,Results(4).MSE,'k');
+set(h,'LineWidth',2);
+h=plot(0:1:50,Results(6).MSE,'k:');
+set(h,'LineWidth',2);
+legend({'SSF-LS','PCD-LS','PCD-SESOP-5'});
+set(gca,'FontSize',14);
+axis([0 50 0.3 1]);
+h=xlabel('Iterations');
+set(h,'FontSize',14);
+ylabel('||x_k - x_0||^2');
+set(h,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Accuracy3.eps
+
+% Part 3 - the solutions obtained
+x=zeros(m,1);
+Ax=Pout*fht(Pin*x); 
+for k=1:1:10,
+    err=b-Ax;
+    ATerr=Pin*ifht(Pout'*err);
+    temp=IW.*ATerr+x;
+    temp=(abs(temp)>=IW*lambda).* ...
+                    (abs(temp)-IW*lambda).*sign(temp);
+    d=temp-x;
+    Ad=Pout*fht(Pin*d);
+    mu=1;
+    for kk=1:1:LSiter,
+        mu=mu-1e-5*(Ad'*(Ad*mu-err)+lambda*d'*sign(x+mu*d));
+    end;
+    x=x+mu*d;
+    Ax=Pout*fht(Pin*x); 
+end;
+x=x.*(abs(x)>1e-4); % discard small entries
+detected=intersect(find(x),find(x0));
+
+figure(7); clf;
+plot(x0); hold on;
+plot(detected,x(detected),'.r');
+axis([1 2^16 -4 4]);
+legend({'x_0','x_k'},2); 
+h=xlabel('index [1 to m]');
+set(h,'FontSize',14);
+ylabel('Amplitude');
+set(h,'FontSize',14);
+set(gca,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Signals1.eps
+
+figure(8); clf;
+plot(x0); hold on;
+h=plot(detected,x(detected),'.r');
+set(h,'MarkerSize',15); 
+axis([40000 42000 -2.5 2.5]);
+legend({'x_0','x_k'},2); 
+h=plot(detected,x0(detected),'.b');
+set(h,'MarkerSize',15); 
+h=xlabel('index [1 to m]');
+set(h,'FontSize',14);
+ylabel('Amplitude');
+set(h,'FontSize',14);
+set(gca,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Signals2.eps
+
+% Compute a projection onto the found support
+xP=x; 
+disp(mean((xP-x0).^2)/mean(x0.^2));
+mu=0.01;
+for k=1:1:200,
+    AxP=Pout*fht(Pin*xP); 
+    err=b-AxP;
+    ATerr=Pin*ifht(Pout'*err);
+    xP=xP+mu*ATerr;
+    temp=zeros(m,1);
+    temp(detected)=xP(detected);
+    xP=temp;
+    disp([k,mean((xP-x0).^2)/mean(x0.^2),err'*err/1000]); 
+end;
+
+figure(9); clf;
+plot(x0); hold on;
+h=plot(detected,x(detected),'.r');
+set(h,'MarkerSize',15); 
+h=plot(detected,xP(detected),'sg');
+set(h,'MarkerSize',5,'MarkerFaceColor','g'); 
+axis([40000 42000 -2.5 2.5]);
+legend({'x_0','x_k','x_k adjusted'},2); 
+h=plot(detected,x0(detected),'.b');
+set(h,'MarkerSize',15); 
+h=xlabel('index [1 to m]');
+set(h,'FontSize',14);
+ylabel('Amplitude');
+set(h,'FontSize',14);
+set(gca,'FontSize',14);
+% print -depsc2 Chapter_06_Iterated_Shrinkage_Signals3.eps

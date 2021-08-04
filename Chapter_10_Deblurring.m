@@ -1,0 +1,501 @@
+% Figures - 10.7 - 10.13
+% =========================================
+% This script runs the deblurring experiment. The details of the 
+% experiment are the following:
+% 1. Measurement created by blurring 'cameraman' with 15*15 
+%     blur kernel, 1/(1+i^2+j^2), and additive w.g.n. with 
+%     sigma^2 = 2 or 8. This gives y.
+% 2. We aim to deblur by minimizing 0.5||HAa-y||^2+lambda*rho(a)
+%     where lambda = 0.075,
+%              rho - the L1 function
+%              H - the blur matrix
+%              A - Unecimated Haar with 3 levels of resolution, 7:1 
+%                   redundancy The code here BUILDS A explicitly - this
+%                    is not necesary in general, but we do so here for clarity
+% 3. Methods used for minimizing this function are
+%     - SSF  (plain)
+%     - SSF + Line Search (Newton algorithm)
+%     - PCD + Line Search (Newton algorithm)
+%     - SSF + SESOP-5 (Newton algorithm)
+%     - PCD + SESOP-5 (Newton algorithm)
+% 4. Outputs we produce:
+%     - The function value f(a) as a function of the computations
+%     - The ISNR as a function of the computations
+%     - Output images with the PCD (10 iterations) for sigma=2 and 
+%       sigma=8
+% =========================================
+
+% clear all; close all;
+
+function []=Chapter_10_Deblurring()
+
+%================================================
+%  O r g a n i z i n g   t h e   D a t a
+%================================================
+
+% --------------------------------- Part 1 - creation of data ------------------------------------
+
+load Chapter_10_DataCameraman;
+
+Haar=Generate_Haar_Matrix(256);
+[n,m]=size(Haar);
+Hy0=BlurOp(y0(:),blur); 
+noise=randn(n,1);
+sigma=sqrt(2); % noise power
+y=Hy0+sigma*noise; % add noise
+
+% ------------------------------- Part 2 - various Preparations --------------------------------
+
+% computing c for SSF (supposed to be 1)
+%           Note: A includes the dictionary and the blur together
+iter=100; 
+temp=randn(m,1); 
+for k=1:1:iter, 
+    temp=temp/norm(temp); 
+    temp=BlurOp(Haar*temp,blur);
+    temp=Haar'*BlurOp(temp,blur);
+    disp([k,norm(temp)]);
+end; 
+c=norm(temp); 
+c=1; % so the code above is not needed
+
+% computing diag(A'*A) for PCD
+%           Note: A includes the dictionary and the blur together
+iter=1000; 
+n=256^2; m=256^2*7;
+ww=zeros(m,1);
+h=waitbar(0,'Random calculations  ...');
+for k=1:1:iter,
+    waitbar(k/iter);
+    temp=randn(n,1); 
+    temp=Haar'*BlurOp(temp,blur);
+    ww=ww+temp.^2;
+    figure(1); clf; 
+    plot(sqrt(ww/k)); 
+    axis([1 m 0 0.2]); hold on; 
+    drawnow;
+end;
+close(h);
+W=ww/iter; 
+IW=1./W;
+
+lambda = 0.075; 
+Iter = 100; % number of iterations in each of the algorithms 
+s = 0.01; % smoothing parameter, used within PhiFunc as well
+LSiter = 10; % Number of iterations of the line-search
+
+% Initalize the output will be organized into this structure: one only once
+Results=struct('Name',[],'Function_Value',[],'ISNR',[]);
+
+%================================================
+% A L G O R I T H M S    S I M U L A T I O N S                        
+%================================================
+
+% ------------------------------- Part 1 - Run plain SSF ----------------------------------------
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+[res1,res2,res3]=RhoFunc(x,s);
+f(1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+ISNR(1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+fprintf('Iteration: %i : Value: %f  ISNR: %f\n',0,f(1),ISNR(1));
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=(1/c)*ATerr+x;
+    x=Analytic_Shrinkage(temp,lambda/c,s);
+    Ax=BlurOp(Haar*x,blur); 
+    [res1,res2,res3]=RhoFunc(x,s);
+    f(k+1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+    ISNR(k+1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+    fprintf('Iteration: %i : Value: %f  ISNR: %f  Residual: %f\n'...
+                       ,k,f(k+1),ISNR(k+1),sqrt(mean((Ax-y).^2)));
+end;
+Results(1).Name='SSF'; 
+Results(1).Function_Value=f; 
+Results(1).ISNR=ISNR; 
+
+% -------------------------- Part 2 - Run SSF + LS  ----------------------------------
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+[res1,res2,res3]=RhoFunc(x,s);
+f(1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+ISNR(1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+fprintf('Iteration: %i : Value: %f  ISNR: %f\n',0,f(1),ISNR(1));
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=(1/c)*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda/c,s);    
+    Atemp=BlurOp(Haar*temp,blur);
+    [x,mu]=LineSearch(x,temp-x,err,Atemp-Ax,LSiter,s,lambda);
+    disp(mu);
+    Ax=(1-mu)*Ax+mu*Atemp; %  instead of Ax=BlurOp(Haar*x,blur); 
+    [res1,res2,res3]=RhoFunc(x,s);
+    f(k+1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+    ISNR(k+1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+    fprintf('Iteration: %i : Value: %f  ISNR: %f  Residual: %f\n'...
+                       ,k,f(k+1),ISNR(k+1),sqrt(mean((Ax-y).^2)));
+end;
+Results(2).Name='SSF-LS'; 
+Results(2).Function_Value=f; 
+Results(2).ISNR=ISNR; 
+
+% -------------------------- Part 3 - Run PCD ----------------------------------------
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+[res1,res2,res3]=RhoFunc(x,s);
+f(1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+ISNR(1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+fprintf('Iteration: %i : Value: %f  ISNR: %f\n',0,f(1),ISNR(1));
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=IW.*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda*IW,s); 
+    Atemp=BlurOp(Haar*temp,blur);
+    [x,mu]=LineSearch(x,temp-x,err,Atemp-Ax,LSiter,s,lambda);
+    Ax=(1-mu)*Ax+mu*Atemp; %  instead of Ax=BlurOp(Haar*x,blur); 
+    [res1,res2,res3]=RhoFunc(x,s);
+    f(k+1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+    ISNR(k+1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+    fprintf('Iteration: %i : Value: %f  ISNR: %f  Residual: %f\n'...
+                       ,k,f(k+1),ISNR(k+1),sqrt(mean((Ax-y).^2)));
+end;
+Results(3).Name='PCD-LS'; 
+Results(3).Function_Value=f; 
+Results(3).ISNR=ISNR; 
+
+% ----------------------- Part 4 - Run SSF + SESOP-5 ---------------------------
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+[res1,res2,res3]=RhoFunc(x,s);
+f(1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+ISNR(1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+fprintf('Iteration: %i : Value: %f  ISNR: %f\n',0,f(1),ISNR(1));
+M=5; % order of the SESOP
+SubS=zeros(m,M);
+ASubS=zeros(n,M);
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=(1/c)*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda/c,s);    
+    SubS=[SubS(:,2:M),temp-x];
+    Atemp=BlurOp(Haar*temp,blur);
+    ASubS=[ASubS(:,2:M),Atemp-Ax];
+    [x,mu]=LineSearch(x,SubS,err,ASubS,LSiter,s,lambda);
+    disp(mu');
+    Ax=Ax+ASubS*mu; 
+    [res1,res2,res3]=RhoFunc(x,s);
+    f(k+1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+    ISNR(k+1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+    fprintf('Iteration: %i : Value: %f  ISNR: %f  Residual: %f\n'...
+                       ,k,f(k+1),ISNR(k+1),sqrt(mean((Ax-y).^2)));
+end;
+Results(4).Name='SSF-SESOP-5'; 
+Results(4).Function_Value=f; 
+Results(4).ISNR=ISNR; 
+
+% ----------------------- Part 5 - Run PCD + SESOP-5 ---------------------------
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+[res1,res2,res3]=RhoFunc(x,s);
+f(1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+ISNR(1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+fprintf('Iteration: %i : Value: %f  ISNR: %f\n',0,f(1),ISNR(1));
+M=5; % order of the SESOP
+SubS=zeros(m,M);
+ASubS=zeros(n,M);
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=IW.*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda*IW,s); 
+    SubS=[SubS(:,2:M),temp-x];
+    Atemp=BlurOp(Haar*temp,blur);
+    ASubS=[ASubS(:,2:M),Atemp-Ax];
+    [x,mu]=LineSearch(x,SubS,err,ASubS,LSiter,s,lambda);
+    disp(mu');
+    Ax=Ax+ASubS*mu; 
+    [res1,res2,res3]=RhoFunc(x,s);
+    f(k+1)=0.5*sum((Ax-y).^2)+lambda*res1; 
+    ISNR(k+1)=10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2)));
+    fprintf('Iteration: %i : Value: %f  ISNR: %f  Residual: %f\n'...
+                       ,k,f(k+1),ISNR(k+1),sqrt(mean((Ax-y).^2)));
+end;
+Results(5).Name='PCD-SESOP-5'; 
+Results(5).Function_Value=f; 
+Results(5).ISNR=ISNR; 
+
+save  Chapter_10_Deblurring_Results.mat
+
+%==============================================%
+%                          C R E A T I O N   O F   O U T P U T                          %
+%==============================================%
+ 
+% Show the blur
+figure(1); clf; 
+subplot(1,2,1); h=mesh(blur); 
+set(h,'LineWidth',2);
+set(gca,'Fontsize',14);
+subplot(1,2,2); 
+imagesc(blur);
+axis image
+colormap(gray(256));
+colorbar; 
+set(gca,'Fontsize',14);
+% print -depsc2 Chapter_10_Blur.eps
+
+% Show the function's value for the iterated shrinkage algorithms
+MIN=min([Results(1).Function_Value, Results(2).Function_Value,...
+               Results(3).Function_Value,Results(4).Function_Value,...
+               Results(5).Function_Value])-0.0001;           
+
+figure(1); clf; 
+h=semilogy(0:1:100,Results(1).Function_Value-MIN,'k');
+set(h,'LineWidth',2);
+hold on; 
+h=semilogy(0:1:100,Results(2).Function_Value-MIN,'k--');
+set(h,'LineWidth',2);
+h=semilogy(0:1:100,Results(4).Function_Value-MIN,'k-.');
+set(h,'LineWidth',2);
+axis([0 100 1e2 1e7]); 
+h=xlabel('Iteration');
+set(h,'Fontsize',14);
+h=ylabel('f(x_k)-f_{min}');
+set(h,'Fontsize',14);
+legend({Results(1).Name,Results(2).Name,Results(4).Name});
+set(gca,'Fontsize',14);
+% print -depsc2 Chapter_10_Func1.eps
+
+figure(2); clf; 
+h=semilogy(0:1:100,Results(3).Function_Value-MIN,'k');
+set(h,'LineWidth',2);
+hold on; 
+h=semilogy(0:1:100,Results(5).Function_Value-MIN,'k--');
+set(h,'LineWidth',2);
+h=semilogy(0:1:100,Results(1).Function_Value-MIN,'k:');
+set(h,'LineWidth',2);
+legend({Results(3).Name,Results(5).Name,'SSF results'});
+h=semilogy(0:1:100,Results(2).Function_Value-MIN,'k:');
+set(h,'LineWidth',2);
+h=semilogy(0:1:100,Results(4).Function_Value-MIN,'k:');
+set(h,'LineWidth',2);
+axis([0 100 1e2 1e7]); 
+h=xlabel('Iteration');
+set(h,'Fontsize',14);
+h=ylabel('f(x_k)-f_{min}');
+set(h,'Fontsize',14);
+set(gca,'Fontsize',14);
+% print -depsc2 Chapter_10_Func2.eps
+
+% Show the ISNR of the Iterated-shrinkage algorithms
+figure(1); clf; 
+h=plot(0:1:100,Results(1).ISNR,'k');
+set(h,'LineWidth',2);
+hold on; 
+h=semilogy(0:1:100,Results(2).ISNR,'k--');
+set(h,'LineWidth',2);
+h=semilogy(0:1:100,Results(4).ISNR,'k-.');
+set(h,'LineWidth',2);
+axis([0 100 0 7.5]); 
+h=xlabel('Iteration');
+set(h,'Fontsize',14);
+h=ylabel('ISNR(x_k)');
+set(h,'Fontsize',14);
+legend({Results(1).Name,Results(2).Name,Results(4).Name},4);
+set(gca,'Fontsize',14);
+% print -depsc2 Chapter_10_ISNR1.eps
+
+figure(2); clf; 
+h=plot(0:1:100,Results(3).ISNR,'k');
+set(h,'LineWidth',2);
+hold on; 
+h=plot(0:1:100,Results(5).ISNR,'k--');
+set(h,'LineWidth',2);
+h=plot(0:1:100,Results(1).ISNR,'k:');
+set(h,'LineWidth',2);
+legend({Results(3).Name,Results(5).Name,'SSF results'},4);
+h=semilogy(0:1:100,Results(2).ISNR,'k:');
+set(h,'LineWidth',2);
+h=semilogy(0:1:100,Results(4).ISNR,'k:');
+set(h,'LineWidth',2);
+axis([0 100 0 7.5]); 
+h=xlabel('Iteration');
+set(h,'Fontsize',14);
+h=ylabel('ISNR(x_k)');
+set(h,'Fontsize',14);
+set(gca,'Fontsize',14);
+% print -depsc2 Chapter_10_ISNR2.eps
+
+% Show output images for sigma^2=2
+Hy0=BlurOp(y0(:),blur); 
+noise=randn(n,1);
+sigma=sqrt(2); 
+y=Hy0+sigma*noise; 
+lambda = 0.075; 
+Iter=30;
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=IW.*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda*IW,s); 
+    Atemp=BlurOp(Haar*temp,blur);
+    [x,mu]=LineSearch(x,temp-x,err,Atemp-Ax,LSiter,s,lambda);
+    Ax=(1-mu)*Ax+mu*Atemp; %  instead of Ax=BlurOp(Haar*x,blur); 
+    [res1,res2,res3]=RhoFunc(x,s);
+    disp(10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2))));
+end;
+figure(1); clf; imagesc(reshape(y0,[256,256]));
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_2_original.eps
+figure(2); clf; imagesc(reshape(y,[256,256]));
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_2_noisy.eps
+figure(3); clf; imagesc(reshape(Haar*x,[256,256])); 
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_2_restored.eps
+
+figure(4); 
+h=semilogy(sort(abs(x),'descend'),'k');
+set(h,'LineWidth',2);
+h=xlabel('index');
+set(h,'Fontsize',14);
+h=ylabel('Sorted absolute values');
+set(h,'Fontsize',14);
+set(gca,'Fontsize',14);
+grid on;
+axis([1 256^2*7 1e-10 1e3]); 
+% print -depsc2 Chapter_10_IsItSparse.eps
+
+% Show output images for sigma^2=8
+Hy0=BlurOp(y0(:),blur); 
+noise=randn(n,1);
+sigma=sqrt(8); 
+y=Hy0+sigma*noise; 
+lambda = 0.15; 
+Iter=30;
+
+x=zeros(m,1);
+Ax=BlurOp(Haar*x,blur); 
+for k=1:1:Iter,
+    err=y-Ax;
+    ATerr=Haar'*BlurOp(err,blur);
+    temp=IW.*ATerr+x;
+    temp=Analytic_Shrinkage(temp,lambda*IW,s); 
+    Atemp=BlurOp(Haar*temp,blur);
+    [x,mu]=LineSearch(x,temp-x,err,Atemp-Ax,LSiter,s,lambda);
+    Ax=(1-mu)*Ax+mu*Atemp; %  instead of Ax=BlurOp(Haar*x,blur); 
+    [res1,res2,res3]=RhoFunc(x,s);
+    disp(10*log10((sum((y-y0(:)).^2)/sum((y0(:)-Haar*x).^2))));
+end;
+figure(1); clf; imagesc(reshape(y0,[256,256]));
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_8_original.eps
+figure(2); clf; imagesc(reshape(y,[256,256]));
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_8_noisy.eps
+figure(3); clf; imagesc(reshape(Haar*x,[256,256])); 
+axis image; axis off; colormap(gray(256)); 
+% print -depsc2 Chapter_10_Image_sigma_8_restored.eps
+
+return;
+
+%================================================
+%================================================
+
+function [Haar]=Generate_Haar_Matrix(n)
+
+D1=sparse(n,n);
+v=sparse([1 zeros(1,n-2), -1]/2);
+for k=1:1:n
+    D1(k,:)=v;
+    v=[v(end),v(1:end-1)];
+end;
+D2=sparse(n,n);
+v=[1 1 zeros(1,n-4), -1 -1]/4;
+for k=1:1:n
+    D2(k,:)=v;
+    v=[v(end),v(1:end-1)];
+end;
+S1=abs(D1);
+S2=abs(D2);
+Haar=[kron(S2,S2),kron(S2,D2),kron(D2,S2),kron(D2,D2),...
+                             kron(S1,D1),kron(D1,S1),kron(D1,D1)];
+return;
+
+%================================================
+%================================================
+
+function [y]=BlurOp(x,blur)
+
+% This function performs the blur operation on an input image x, assuming
+% cyclic boundary condition
+
+n=length(x);
+x=reshape(x,[sqrt(n),sqrt(n)]);
+d=size(blur,1);
+d=(d-1)/2;
+xe=[x(:,end-d+1:end), x, x(:,1:1:d)];
+xe=[xe(end-d+1:end,:); xe; xe(1:1:d,:)]; 
+y=conv2(xe,blur,'valid'); 
+y=y(:);
+return;
+
+%================================================
+%================================================
+
+function [obj,grad,hess]=RhoFunc(x,s)
+
+% This function returns the value of rho(x), its gradient and its
+% Hessian. The function rho(x) is a smoothed version of L1
+
+ax=abs(x);
+obj=sum(ax - s*log(1+ax/s));
+grad=x./(s+ax); 
+hess=s./(s+ax).^2; 
+ 
+return;
+
+%================================================
+%================================================
+
+function Out=Analytic_Shrinkage(In,lambda,s)
+
+% This function applies the LUT that minimizes the function
+%         g(x)=0.5*(x-In)^2+lambda*rho(x)
+
+InM=abs(In);
+Temp=InM-lambda-s; 
+Out=(Temp+sqrt(Temp.^2+4*s*InM))/2; 
+Out=sign(In).*Out; 
+
+return;
+
+%================================================
+%================================================
+
+function [x,mu] = LineSearch(x,dd,err,Add,iter,s,lambda)
+    
+% In this function we search mu that minimizes the function 
+% g(mu)=0.5*||ee+mu*vv||^2+rho(x+mu*dd). Once mu is found, 
+% the output is aa+mu*dd
+
+S=size(dd,2);
+mu=[zeros(S-1,1); 1];
+for k=1:1:iter,
+    [res1,res2,res3]=RhoFunc(x+dd*mu,s);
+    grad=Add'*(Add*mu-err)+lambda*dd'*res2;
+    hess=Add'*Add+lambda*dd'*spdiags(res3,0,length(res3),length(res3))*dd;
+    mu=mu-pinv(hess)*grad;
+end;
+x=x+dd*mu;
+
+return;

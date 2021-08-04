@@ -1,0 +1,46 @@
+% Figure - NONE
+% =========================================
+% In this script we explore the efficiency of the weak-MP, 
+% compared to the plain MP.
+
+n=30; m=50; Smax=10; Exper=2000; 
+
+A=randn(n,m);
+W=sqrt(diag(A'*A));
+for k=1:1:m, 
+    A(:,k)=A(:,k)/W(k); 
+end; 
+
+count=zeros(Smax,Exper); 
+for S=1:1:Smax,
+   
+    for experiment=1:1:Exper
+       
+        % Generate a test signal of cardinality S
+        x=zeros(m,1);
+        pos=randperm(m);
+        x(pos(1:S))=sign(randn(S,1)).*(1+rand(S,1));
+        b=A*x; 
+    
+        % Apply WMP
+        thrWMP=1e-8; t=0.5; 
+        r=b;
+        xWMP=zeros(m,1);
+        for kk=1:1:S,
+            Z=abs(A'*r);
+            posZ=find(Z>=t*sqrt(r'*r),1);
+            if isempty(posZ)
+                count(S,experiment)=count(S,experiment)+1/S; 
+                posZ=find(Z==max(Z),1);
+            else
+                count(S,experiment)=count(S,experiment)+posZ/m/S; 
+            end;
+            xWMP(posZ)=xWMP(posZ)+A(:,posZ)'*r;
+            r=r-A(:,posZ)*A(:,posZ)'*r;
+        end;
+        
+    end;    
+    disp(mean(count(S,:))); 
+end;
+
+
